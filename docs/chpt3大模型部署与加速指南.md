@@ -273,4 +273,60 @@ streamlit run /root/autodl-tmp/chatBot.py --server.address 127.0.0.1 --server.po
 ![Alt text](../pic/chatBot.png)
 
 ## 3.2 大模型加速
-未完待续
+
+### 3.2.1 获取和编译llama.cpp
+
+#### 3.2.1.1 克隆llama.cpp仓库
+
+```shell
+git clone https://github.com/ggerganov/llama.cpp
+cd llama.cpp
+```
+
+#### 3.2.1.2 编译llama.cpp
+
+在llama.cpp目录下执行以下命令：
+
+```shell
+make
+```
+
+### 3.2.2  下载qwen模型
+
+#### 3.2.2.1 安装lfs
+
+```shell
+curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+sudo apt-get install git-lfs
+git lfs install
+```
+
+#### 3.2.2.2 模型下载
+
+新建model_download.py文件并在文件内输入以下内容：
+
+```python
+from modelscope.hub.file_download import model_file_download
+ 
+model_dir = model_file_download(model_id='qwen/Qwen2-7B-Instruct-GGUF',
+                                file_path='qwen2-7b-instruct-q5_k_m.gguf',
+                                revision='master',
+                                cache_dir='/root/autodl-tmp')
+
+```
+
+执行python model_download.py
+
+### 3.2.3 使用llama.cpp进行推理
+
+```shell
+./llama-cli -m /root/autodl-tmp/qwen/Qwen2-7B-Instruct-GGUF/qwen2-7b-instruct-q5_k_m.gguf \
+  -n 512 -co -i -if -f prompts/chat-with-qwen.txt \
+  --in-prefix "<|im_start|>user\n" \
+  --in-suffix "<|im_end|>\n<|im_start|>assistant\n" \
+  -ngl 24 -fa
+```
+
+<div align="center">
+<img src='../pic/llama_cpp_chat.png'>
+</div>
