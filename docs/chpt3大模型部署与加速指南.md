@@ -273,17 +273,17 @@ streamlit run /root/autodl-tmp/chatBot.py --server.address 127.0.0.1 --server.po
 ![Alt text](../pic/chatBot.png)
 
 ## 3.2 大模型加速
+### 3.2.1 基于llama.cpp
+#### 3.2.1.1 获取和编译llama.cpp
 
-### 3.2.1 获取和编译llama.cpp
-
-#### 3.2.1.1 克隆llama.cpp仓库
+##### 3.2.1.1.1 克隆llama.cpp仓库
 
 ```shell
 git clone https://github.com/ggerganov/llama.cpp
 cd llama.cpp
 ```
 
-#### 3.2.1.2 编译llama.cpp
+##### 3.2.1.1.2 编译llama.cpp
 
 在llama.cpp目录下执行以下命令：
 
@@ -291,9 +291,9 @@ cd llama.cpp
 make
 ```
 
-### 3.2.2  下载qwen模型
+#### 3.2.1.2  下载qwen模型
 
-#### 3.2.2.1 安装lfs
+##### 3.2.1.2.1 安装lfs
 
 ```shell
 curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
@@ -301,7 +301,7 @@ sudo apt-get install git-lfs
 git lfs install
 ```
 
-#### 3.2.2.2 模型下载
+##### 3.2.1.2.2 模型下载
 
 新建model_download.py文件并在文件内输入以下内容：
 
@@ -317,7 +317,7 @@ model_dir = model_file_download(model_id='qwen/Qwen2-7B-Instruct-GGUF',
 
 执行python model_download.py
 
-### 3.2.3 使用llama.cpp进行推理
+#### 3.2.1.3 使用llama.cpp进行推理
 
 ```shell
 ./llama-cli -m /root/autodl-tmp/qwen/Qwen2-7B-Instruct-GGUF/qwen2-7b-instruct-q5_k_m.gguf \
@@ -330,3 +330,133 @@ model_dir = model_file_download(model_id='qwen/Qwen2-7B-Instruct-GGUF',
 <div align="center">
 <img src='../pic/llama_cpp_chat.png'>
 </div>
+
+
+### 3.2.2 基于vLLM
+
+ **vLLM 简介**
+
+`vLLM` 框架是一个高效的大语言模型**推理和部署服务系统**，具备以下特性：
+
+- **高效的内存管理**：通过 `PagedAttention` 算法，`vLLM` 实现了对 `KV` 缓存的高效管理，减少了内存浪费，优化了模型的运行效率。
+- **高吞吐量**：`vLLM` 支持异步处理和连续批处理请求，显著提高了模型推理的吞吐量，加速了文本生成和处理速度。
+- **易用性**：`vLLM` 与 `HuggingFace` 模型无缝集成，支持多种流行的大型语言模型，简化了模型部署和推理的过程。兼容 `OpenAI` 的 `API` 服务器。
+- **分布式推理**：框架支持在多 `GPU` 环境中进行分布式推理，通过模型并行策略和高效的数据通信，提升了处理大型模型的能力。
+- **开源共享**：`vLLM` 由于其开源的属性，拥有活跃的社区支持，这也便于开发者贡献和改进，共同推动技术发展。
+
+#### 3.2.2.1 环境准备
+
+`pip` 换源加速下载并安装依赖包
+
+```bash
+# 升级pip
+python -m pip install --upgrade pip
+# 更换 pypi 源加速库的安装
+pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+pip install modelscope==1.11.0
+pip install openai==1.17.1
+pip install torch==2.1.2+cu121
+pip install tqdm==4.64.1
+pip install transformers==4.39.3
+# 下载flash-attn 请等待大约10分钟左右~
+MAX_JOBS=8 pip install flash-attn --no-build-isolation
+pip install vllm==0.4.0.post1
+```
+
+直接安装 `vLLM` 会安装 `CUDA 12.1` 版本。
+
+```bash
+pip install vllm
+```
+
+#### 3.2.2.2 模型下载
+
+使用 `modelscope` 中的 `snapshot_download` 函数下载模型，第一个参数为模型名称，参数 `cache_dir`为模型的下载路径。
+
+然后新建名为 `model_download.py` 的 `python` 脚本，并在其中输入以下内容并保存
+
+```python
+# model_download.py
+import os
+import torch
+from modelscope import snapshot_download, AutoModel, AutoTokenizer
+model_dir = snapshot_download('qwen/Qwen2-7B-Instruct', cache_dir='', revision='master')
+```
+
+然后在终端中输入 `python model_download.py` 执行下载，这里需要耐心等待一段时间直到模型下载完成。
+
+#### 3.2.2.3 代码准备
+ **Python脚本**
+
+在 `/root/autodl-tmp` 路径下新建 `vllm_model.py` 文件并在其中输入以下内容。
+
+首先从 `vLLM` 库中导入 `LLM` 和 `SamplingParams` 类。`LLM` 类是使用 `vLLM` 引擎运行离线推理的主要类。`SamplingParams` 类指定采样过程的参数，用于控制和调整生成文本的随机性和多样性。
+
+`vLLM` 提供了非常方便的封装，我们直接传入模型名称或模型路径即可，不必手动初始化模型和分词器。
+
+我们可以通过这个代码示例熟悉下 ` vLLM` 引擎的使用方式。
+
+```python
+# vllm_model.py
+from vllm import LLM, SamplingParams
+from transformers import AutoTokenizer
+import os
+import json
+
+# 自动下载模型时，指定使用modelscope。不设置的话，会从 huggingface 下载
+os.environ['VLLM_USE_MODELSCOPE']='True'
+
+def get_completion(prompts, model, tokenizer=None, max_tokens=512, temperature=0.8, top_p=0.95, max_model_len=2048):
+    stop_token_ids = [151329, 151336, 151338]
+    # 创建采样参数。temperature 控制生成文本的多样性，top_p 控制核心采样的概率
+    sampling_params = SamplingParams(temperature=temperature, top_p=top_p, max_tokens=max_tokens, stop_token_ids=stop_token_ids)
+    # 初始化 vLLM 推理引擎
+    llm = LLM(model=model, tokenizer=tokenizer, max_model_len=max_model_len,trust_remote_code=True)
+    outputs = llm.generate(prompts, sampling_params)
+    return outputs
+
+
+if __name__ == "__main__":  
+    # 初始化 vLLM 推理引擎
+    model='/root/autodl-tmp/qwen/Qwen2-7B-Instruct' # 指定模型路径
+    # model="qwen/Qwen2-7B-Instruct" # 指定模型名称，自动下载模型
+    tokenizer = None
+    # 加载分词器后传入vLLM 模型，但不是必要的。
+    # tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False) 
+  
+    text = ["你好，帮我介绍一下什么时大语言模型。",
+            "可以给我将一个有趣的童话故事吗？"]
+    # messages = [
+    #     {"role": "system", "content": "你是一个有用的助手。"},
+    #     {"role": "user", "content": prompt}
+    # ]
+    # 作为聊天模板的消息，不是必要的。
+    # text = tokenizer.apply_chat_template(
+    #     messages,
+    #     tokenize=False,
+    #     add_generation_prompt=True
+    # )
+
+    outputs = get_completion(text, model, tokenizer=tokenizer, max_tokens=512, temperature=1, top_p=1, max_model_len=2048)
+
+    # 输出是一个包含 prompt、生成文本和其他信息的 RequestOutput 对象列表。
+    # 打印输出。
+    for output in outputs:
+        prompt = output.prompt
+        generated_text = output.outputs[0].text
+        print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
+```
+
+运行代码
+
+```bash
+cd /root/autodl-tmp && python vllm_model.py
+```
+
+结果如下：
+
+```bash
+Prompt: '你好，帮我介绍一下什么时大语言模型。', Generated text: ' 当然！大语言模型是人工智能中的一种模型，特别擅长生成高质量的文本。它们从大量的文本数据中学习，并可以生成类似真实 文本的文本片段。例如，让它们写故事、文章、诗歌，或者在对话中生成连贯的回答。这类模型也被用于许多其他自然语言处理任务，如文本摘要、翻译和代码生成。这是因为它们能够理解和生成复杂的 语法和语义结构，以及捕捉到上下文中的微小细节。大语言模型的核心是采用深度学习技术，尤其是基于Transformer架构的模型，这种架构很好地处理了大量的序列数据，并在最近几年取得了显著的进展，这得益于大规模的训练数据集和计算资源。如今，许多大型语言模型是开源的，并且应用于各种开发和研究环境中。'
+
+Prompt: '可以给我将一个有趣的童话故事吗？', Generated text: ' 当然可以。这是一个关于勇敢的小猫头鹰的主题的童话故事：\n\n从前，在一片宁静的森林深处，住着一个聪明而勇敢的小猫头鹰。 它的名字叫迈克。每天，它都会在夜色中穿梭，寻找食物和学习更多的生存之道。它的家是一个它自己制作的巨大鸟巢，挂在一片松树的高枝上。\n\n一天夜里，森林受到了威胁，因为一只贪婪的老母狼 叛领了一队强盗在他的领地打劫。所有动物都陷入了恐慌，胆小的们躲在家里不敢出来，而胆大的动物们则是四处逃难。但是，没有一只动物敢于挑战母狼。\n\n作为勇敢和智慧的象征，小猫头鹰迈克决 定挺身而出。它认识到单靠野兽的力量是无法对抗母狼及其随从的，但是凭借智慧与策略，它或许可以找到一条解决方案。\n\n不日，迈克带着一个大胆的计划回到了森林。它宣布，所有的生物都将暂时 放下彼此之间的争斗，携手合作对抗这场危机。为了做到这一点，迈克将动物们聚集在一起，让迷人的动物学者白鹤教授教授所有生物如何彼此沟通、理解，并动员各具专业能力的动物，如挖掘专家老鼠 、电子设备专家松鼠制作无线电来秘密向森林里的其他动物发送求助信息。\n\n计划逐渐展开，动物们开始有了防范意识，并在夜晚骚动的女狼群不知道任何人计划的时候做出了各种有效的防御。动物中 个个都贡献了他们的力量。兔子与貘堵住了几个重要的入口，灵巧的松鼠们则收集了大量的浆果和营养物质，以供整个森林的动物们补充能量。\n\n最后，在一场夜里的明智逮捕行动之后，迈克的小猫头 鹰巧妙地通过其较好的夜视和听力，联合瞳熊和狮子成功的将贪婪的老母狼及其共犯赶出了森林。\n\n消息遍传，所有动物都对小猫头鹰的智慧，勇敢以及作为团队领袖的力量表示了敬意。他们现在紧紧 团结在了一起，建立了和谐而有尊严的社群。\n\n从此，森林中充满了欢声笑语，动物们和小猫头鹰迈克一起快乐地生活在和平与和谐中，展现出团结与智慧的伟大力量。这则故事教会我们，当我们团结 一致，敢于面对困难，发挥创造力和共同努力时，没有什么不可能克服的。'
+```
